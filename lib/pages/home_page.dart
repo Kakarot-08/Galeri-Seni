@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import '../main.dart';
 import '../database_helper.dart';
 
@@ -31,6 +32,53 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
+  Widget _buildImage(dynamic imageData) {
+    try {
+      Uint8List bytes;
+      
+      if (imageData is String) {
+        // Handle base64 encoded string (web)
+        bytes = base64Decode(imageData);
+      } else if (imageData is List<int>) {
+        // Handle List<int> (mobile)
+        bytes = Uint8List.fromList(imageData);
+      } else {
+        return const Icon(Icons.broken_image, size: 100, color: Colors.grey);
+      }
+
+      return Image.memory(
+        bytes,
+        fit: BoxFit.cover,
+        errorBuilder: (context, error, stackTrace) {
+          print('Image error: $error');
+          return const Icon(Icons.error_outline, size: 50, color: Colors.grey);
+        },
+      );
+    } catch (e) {
+      print('Error displaying image: $e');
+      return const Icon(Icons.error_outline, size: 50, color: Colors.grey);
+    }
+  }
+
+  Uint8List _getImageBytes(dynamic imageData) {
+    try {
+      if (imageData is Uint8List) {
+        return imageData;
+      } else if (imageData is List<int>) {
+        return Uint8List.fromList(imageData);
+      } else if (imageData is List<dynamic>) {
+        return Uint8List.fromList(imageData.cast<int>());
+      } else if (imageData is String) {
+        return base64Decode(imageData);
+      } else {
+        return Uint8List(0);
+      }
+    } catch (e) {
+      print('Error getting image bytes: $e');
+      return Uint8List(0);
+    }
+  }
+
   Future<void> _loadPhotos() async {
     setState(() {
       _isLoading = true;
@@ -42,7 +90,9 @@ class _HomePageState extends State<HomePage> {
       if (photos.isNotEmpty) {
         print('First photo data: ${photos.first.keys}');
         print('First photo image_data type: ${photos.first['image_data'].runtimeType}');
-        print('First photo image_data length: ${(photos.first['image_data'] as List).length}');
+        if (photos.first['image_data'] is List) {
+          print('First photo image_data length: ${(photos.first['image_data'] as List).length}');
+        }
       }
       setState(() {
         _photos = photos;
@@ -241,6 +291,16 @@ class _HomePageState extends State<HomePage> {
                       photo: photo,
                       colorScheme: colorScheme,
                       onDelete: () => _deletePhoto(photo['id']),
+                      onTap: () {
+                        showDialog(
+                          context: context,
+                          builder: (context) => _PhotoDialog(
+                            title: photo['title'] as String? ?? 'Untitled',
+                            imageBytes: _getImageBytes(photo['image_data']),
+                            createdAt: photo['created_at'] as String? ?? '',
+                          ),
+                        );
+                      },
                     );
                   },
                 );
@@ -324,47 +384,24 @@ class _PhotoCard extends StatelessWidget {
   final Map<String, dynamic> photo;
   final ColorScheme colorScheme;
   final VoidCallback onDelete;
+  final VoidCallback onTap;
 
   const _PhotoCard({
     required this.photo,
     required this.colorScheme,
     required this.onDelete,
+    required this.onTap,
   });
 
   @override
   Widget build(BuildContext context) {
-    final rawImageData = photo['image_data'];
-    late Uint8List imageBytes;
-
-    if (rawImageData is Uint8List) {
-      imageBytes = rawImageData;
-    } else if (rawImageData is List<int>) {
-      imageBytes = Uint8List.fromList(rawImageData);
-    } else if (rawImageData is List<dynamic>) {
-      imageBytes = Uint8List.fromList(rawImageData.cast<int>());
-    } else if (rawImageData is String) {
-      imageBytes = base64Decode(rawImageData);
-    } else {
-      imageBytes = Uint8List(0);
-    }
-
-    print('PhotoCard: image_data length = ${imageBytes.length}');
-    final title = photo['title'] as String;
-    final createdAt = photo['created_at'] as String;
+    final title = photo['title'] as String? ?? 'Untitled';
+    final createdAt = photo['created_at'] as String? ?? '';
 
     return Card(
       clipBehavior: Clip.antiAlias,
       child: InkWell(
-        onTap: () {
-          showDialog(
-            context: context,
-            builder: (context) => _PhotoDialog(
-              title: title,
-              imageBytes: imageBytes,
-              createdAt: createdAt,
-            ),
-          );
-        },
+        onTap: onTap,
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
@@ -380,12 +417,7 @@ class _PhotoCard extends StatelessWidget {
                     end: Alignment.bottomRight,
                   ),
                 ),
-                child: Image.memory(
-                  imageBytes,
-                  fit: BoxFit.cover,
-                  width: double.infinity,
-                  height: double.infinity,
-                ),
+                child: _buildImageContent(),
               ),
             ),
             Padding(
@@ -437,9 +469,8 @@ class _PhotoCard extends StatelessWidget {
                             ),
                           );
                         },
-                        icon: const Icon(Icons.delete_outline, size: 20),
+                        icon: const Icon(Icons.delete_outline),
                         iconSize: 20,
-                        color: Colors.grey[600],
                       ),
                     ],
                   ),
@@ -450,6 +481,37 @@ class _PhotoCard extends StatelessWidget {
         ),
       ),
     );
+  }
+
+  Widget _buildImageContent() {
+    try {
+      final rawImageData = photo['image_data'];
+      Uint8List imageBytes;
+
+      if (rawImageData is Uint8List) {
+        imageBytes = rawImageData;
+      } else if (rawImageData is List<int>) {
+        imageBytes = Uint8List.fromList(rawImageData);
+      } else if (rawImageData is List<dynamic>) {
+        imageBytes = Uint8List.fromList(rawImageData.cast<int>());
+      } else if (rawImageData is String) {
+        imageBytes = base64Decode(rawImageData);
+      } else {
+        return const Icon(Icons.broken_image, size: 50, color: Colors.grey);
+      }
+
+      return Image.memory(
+        imageBytes,
+        fit: BoxFit.cover,
+        width: double.infinity,
+        height: double.infinity,
+        errorBuilder: (context, error, stackTrace) {
+          return const Icon(Icons.error_outline, size: 50, color: Colors.grey);
+        },
+      );
+    } catch (e) {
+      return const Icon(Icons.error_outline, size: 50, color: Colors.grey);
+    }
   }
 
   String _formatDate(String dateString) {

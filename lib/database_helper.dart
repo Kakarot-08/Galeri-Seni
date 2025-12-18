@@ -1,9 +1,11 @@
 import 'dart:convert';
+import 'dart:io';
 import 'package:sqflite/sqflite.dart';
 import 'package:path/path.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:universal_platform/universal_platform.dart';
 
 class DatabaseHelper {
   static final DatabaseHelper instance = DatabaseHelper._init();
@@ -13,17 +15,33 @@ class DatabaseHelper {
   DatabaseHelper._init();
 
   Future<void> init() async {
-    if (!kIsWeb) {
-      await database;
+    if (kIsWeb) {
+      // Initialize web storage
+      await SharedPreferences.getInstance();
+    } else if (UniversalPlatform.isAndroid || UniversalPlatform.isIOS) {
+      // Initialize mobile database
+      try {
+        await database;
+      } catch (e) {
+        print('Error initializing database: $e');
+        rethrow;
+      }
     }
   }
 
   Future<Database> get database async {
-    if (kIsWeb) return throw Exception('SQLite not available on web');
+    if (kIsWeb) {
+      throw UnsupportedError('SQLite not available on web');
+    }
     
     if (_database != null) return _database!;
-    _database = await _initDB('atelier.db');
-    return _database!;
+    try {
+      _database = await _initDB('atelier.db');
+      return _database!;
+    } catch (e) {
+      print('Database error: $e');
+      rethrow;
+    }
   }
 
   Future<Database> _initDB(String filePath) async {
@@ -78,36 +96,56 @@ class DatabaseHelper {
     required String fileName,
     required List<int> imageData,
   }) async {
-    final now = DateTime.now().toIso8601String();
-    final photoData = {
-      'title': title,
-      'file_name': fileName,
-      'image_data': imageData,
-      'created_at': now,
-    };
+    try {
+      final now = DateTime.now().toIso8601String();
+      
+      // Convert image data to base64 for web, keep as Uint8List for mobile
+      final dynamic imageDataToStore = kIsWeb 
+          ? base64Encode(imageData) 
+          : imageData;
 
-    if (kIsWeb) {
-      final photos = await _loadPhotosFromWeb();
-      final newPhoto = Map<String, dynamic>.from(photoData);
-      newPhoto['id'] = photos.isEmpty ? 1 : (photos.last['id'] as int) + 1;
-      photos.add(newPhoto);
-      await _savePhotosToWeb(photos);
-      return newPhoto['id'] as int;
-    } else {
-      final db = await instance.database;
-      return await db.insert('photos', photoData);
+      final photoData = {
+        'title': title,
+        'file_name': fileName,
+        'image_data': imageDataToStore,
+        'created_at': now,
+      };
+
+      if (kIsWeb) {
+        final photos = await _loadPhotosFromWeb();
+        final newPhoto = Map<String, dynamic>.from(photoData);
+        newPhoto['id'] = photos.isEmpty ? 1 : (photos.last['id'] as int) + 1;
+        photos.add(newPhoto);
+        await _savePhotosToWeb(photos);
+        return newPhoto['id'] as int;
+      } else {
+        final db = await instance.database;
+        return await db.insert('photos', photoData);
+      }
+    } catch (e) {
+      print('Error creating photo: $e');
+      rethrow;
     }
   }
 
   Future<List<Map<String, dynamic>>> getAllPhotos() async {
-    if (kIsWeb) {
-      return await _loadPhotosFromWeb();
-    } else {
-      final db = await instance.database;
-      return await db.query(
-        'photos',
-        orderBy: 'created_at DESC',
-      );
+    try {
+      if (kIsWeb) {
+        return await _loadPhotosFromWeb();
+      } else {
+        final db = await instance.database;
+        final photos = await db.query('photos', orderBy: 'created_at DESC');
+        // Ensure image_data is properly converted
+        return photos.map((photo) {
+          if (photo['image_data'] is String) {
+            photo['image_data'] = base64Decode(photo['image_data'] as String);
+          }
+          return photo;
+        }).toList();
+      }
+    } catch (e) {
+      print('Error getting photos: $e');
+      return [];
     }
   }
 
